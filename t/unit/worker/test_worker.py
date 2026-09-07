@@ -788,6 +788,79 @@ class test_WorkController(ConsumerCase):
         self.worker.blueprint = None
         self.worker._shutdown()
 
+    def test_warm_shutdown_does_not_cap_the_broker_socket(self):
+        # A warm shutdown runs against a healthy broker and still has acks to
+        # flush.  Capping those writes would turn a slow broker into lost acks
+        # and redelivered - so twice-executed - tasks, which is worse than the
+        # hang it would prevent.  Bounding belongs in on_cold_shutdown, where
+        # the caller has already asked to stop now.
+        sock, peer = socket.socketpair()
+        try:
+            connection = Mock(name='connection')
+            connection.transport.channels = None
+            connection._connection._transport.sock = sock
+            self.worker.consumer = Mock(name='consumer')
+            self.worker.consumer.connection = connection
+
+            seen = {}
+            self.worker.blueprint = Mock(name='blueprint')
+            self.worker.blueprint.stop.side_effect = (
+                lambda *a, **kw: seen.update(timeout=sock.gettimeout()))
+
+            self.worker._shutdown()
+
+            assert seen['timeout'] is None, (
+                'warm shutdown must leave the broker socket unbounded so '
+                'in-flight acks can still be flushed'
+            )
+        finally:
+            sock.close()
+            peer.close()
+
+    def test_cold_shutdown_bounds_open_broker_sockets(self):
+        # Issue 975 has an earlier entry point than _shutdown(): the cold
+        # shutdown handler cancels the task consumer itself, and for amqp that
+        # is a basic_cancel which waits for a reply.  Reaching it means
+        # _shutdown() never runs, so the bound has to be applied here too.
+        from celery.apps.worker import on_cold_shutdown
+        # Import the module the same way on_cold_shutdown does, so the flags
+        # restored below are the ones it actually mutates.
+        from celery.worker import state as worker_state
+
+        sock, peer = socket.socketpair()
+        # on_cold_shutdown sets the global shutdown flags; leaving them set
+        # trips the sanity_no_shutdown_flags_set fixture for every test that
+        # runs after this one.
+        prev_flags = (worker_state.should_stop, worker_state.should_terminate)
+        try:
+            assert sock.gettimeout() is None
+
+            connection = Mock(name='connection')
+            connection.transport.channels = None
+            connection._connection._transport.sock = sock
+
+            worker = Mock(name='worker')
+            worker.consumer.connection = connection
+            seen = {}
+            worker.consumer.task_consumer.cancel.side_effect = (
+                lambda *a, **kw: seen.update(timeout=sock.gettimeout()))
+
+            with patch('celery.apps.worker.install_worker_term_hard_handler'):
+                on_cold_shutdown(worker)
+
+            assert seen['timeout'] == worker_module.SHUTDOWN_SOCKET_TIMEOUT
+        finally:
+            worker_state.should_stop, worker_state.should_terminate = prev_flags
+            sock.close()
+            peer.close()
+
+    def test_shutdown_without_consumer_connection(self):
+        # Shutdown can run before the consumer ever connected.
+        self.worker.consumer = None
+        self.worker.blueprint = Mock(name='blueprint')
+        self.worker._shutdown()
+        self.worker.blueprint.stop.assert_called_once()
+
     @patch('celery.worker.worker.create_pidlock')
     def test_use_pidfile(self, create_pidlock):
         create_pidlock.return_value = Mock()
