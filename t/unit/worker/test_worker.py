@@ -797,6 +797,7 @@ class test_WorkController(ConsumerCase):
         # the caller has already asked to stop now.
         sock, peer = socket.socketpair()
         try:
+            sock.settimeout(None)
             connection = Mock(name='connection')
             connection.transport.channels = None
             connection._connection._transport.sock = sock
@@ -834,7 +835,7 @@ class test_WorkController(ConsumerCase):
         # runs after this one.
         prev_flags = (worker_state.should_stop, worker_state.should_terminate)
         try:
-            assert sock.gettimeout() is None
+            sock.settimeout(None)
 
             connection = Mock(name='connection')
             connection.transport.channels = None
@@ -846,7 +847,8 @@ class test_WorkController(ConsumerCase):
             worker.consumer.task_consumer.cancel.side_effect = (
                 lambda *a, **kw: seen.update(timeout=sock.gettimeout()))
 
-            with patch('celery.apps.worker.install_worker_term_hard_handler'):
+            with patch('celery.apps.worker.install_worker_term_hard_handler'), \
+                    patch('celery.apps.worker.safe_say'):
                 on_cold_shutdown(worker)
 
             assert seen['timeout'] == worker_module.SHUTDOWN_SOCKET_TIMEOUT

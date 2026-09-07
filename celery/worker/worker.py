@@ -262,17 +262,12 @@ class WorkController:
         # if blueprint does not exist it means that we had an
         # error before the bootsteps could be initialized.
         if self.blueprint is not None:
-            # Deliberately *not* bounding the broker socket here.  A warm
-            # shutdown runs against a healthy broker and still has acks to
-            # flush for tasks that just finished; capping those writes would
-            # turn a slow broker (RabbitMQ flow control, a full TCP window)
-            # into lost acks and redelivered - so twice-executed - tasks.
-            # Against a broker that has gone silent a warm shutdown can
-            # therefore still wedge here.  The escape hatch is a cold
-            # shutdown (SIGQUIT), where ``on_cold_shutdown`` bounds the
-            # socket; operators who want warm shutdown bounded too can set
-            # the redis ``socket_timeout`` transport option, which is
-            # unset by default.
+            # Not bounding the broker socket here: a warm shutdown still has
+            # acks to flush, and capping those writes on a slow broker would
+            # lose acks and redeliver tasks.  A silent broker can still wedge
+            # a warm shutdown; the escape hatch is a cold shutdown (SIGQUIT),
+            # which on_cold_shutdown bounds, or the redis ``socket_timeout``
+            # transport option.
             with default_socket_timeout(SHUTDOWN_SOCKET_TIMEOUT):  # Issue 975
                 self.blueprint.stop(self, terminate=not warm)
                 self.blueprint.join()

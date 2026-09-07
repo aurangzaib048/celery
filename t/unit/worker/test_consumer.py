@@ -504,7 +504,9 @@ class test_Consumer(ConsumerTestCase):
         # ``Channel.close()``) block forever.  See GH-9705.
         sock, peer = socket.socketpair()
         try:
-            assert sock.gettimeout() is None
+            # Do not assume the process default; an earlier test may have
+            # changed it.
+            sock.settimeout(None)
             c = self.get_consumer()
             c.connection.transport.channels = [
                 SimpleNamespace(client=SimpleNamespace(

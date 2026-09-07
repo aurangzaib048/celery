@@ -446,11 +446,9 @@ def on_cold_shutdown(worker: Worker):
     # Initiate soft shutdown process (if enabled and tasks are running)
     worker.wait_for_soft_shutdown()
 
-    # Bound the broker socket before anything below reads from it.  cancel()
-    # is a basic_cancel on amqp, which waits for a reply that a silent broker
-    # will never send (Issue 975).  This is the only place the bound is
-    # applied: a warm shutdown deliberately leaves the socket unbounded so
-    # in-flight acks can still be flushed (see WorkController._shutdown).
+    # Bound the broker socket before cancel(): on amqp that is a basic_cancel
+    # waiting for a reply a silent broker never sends (Issue 975).  Warm
+    # shutdown is deliberately left unbounded, see WorkController._shutdown.
     connection = getattr(worker.consumer, 'connection', None)
     if connection is not None:
         bound_open_broker_sockets(connection, SHUTDOWN_SOCKET_TIMEOUT)

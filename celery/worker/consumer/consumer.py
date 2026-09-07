@@ -419,10 +419,8 @@ class Consumer:
 
     def on_connection_error_after_connected(self, exc):
         warn(CONNECTION_RETRY, exc_info=True)
-        # Bind the sockets that are already open before cleanup reads from
-        # them.  collect()'s own socket_timeout only applies to sockets
-        # created afterwards, so on its own it cannot stop the cleanup from
-        # blocking forever on a half-open connection (see :issue:`9705`).
+        # Bound the sockets that are already open before cleanup reads from
+        # them; collect()'s socket_timeout only applies to new sockets.
         bound_open_broker_sockets(self.connection, COLLECT_SOCKET_TIMEOUT)
         try:
             self.connection.collect(socket_timeout=COLLECT_SOCKET_TIMEOUT)
