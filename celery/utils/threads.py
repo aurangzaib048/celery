@@ -83,7 +83,7 @@ def bound_open_broker_sockets(connection, timeout):
     ``Channel.close()``, py-amqp waits for a ``basic_cancel`` reply), and
     against a peer that went silent without RST they never return.
 
-    See :issue:`9705` (reconnect) and :issue:`975` (shutdown).  Best effort:
+    See Issue #9705 (reconnect) and Issue #975 (shutdown).  Best effort:
     never raises, as both callers are teardown paths.
     """
     try:
