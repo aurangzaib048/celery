@@ -27,7 +27,7 @@ except ImportError:
 
 __all__ = (
     'bgThread', 'Local', 'LocalStack', 'LocalManager',
-    'get_ident', 'default_socket_timeout',
+    'get_ident', 'default_socket_timeout', 'bound_open_broker_sockets',
 )
 
 USE_FAST_LOCALS = os.environ.get('USE_FAST_LOCALS')
@@ -35,11 +35,81 @@ USE_FAST_LOCALS = os.environ.get('USE_FAST_LOCALS')
 
 @contextmanager
 def default_socket_timeout(timeout):
-    """Context temporarily setting the default socket timeout."""
+    """Context temporarily setting the default socket timeout.
+
+    Note:
+    ----
+        :func:`socket.setdefaulttimeout` only affects sockets created
+        *afterwards*.  To bound I/O on a connection that is already open,
+        use :func:`bound_open_broker_sockets`.
+    """
     prev = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
-    yield
-    socket.setdefaulttimeout(prev)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
+def _open_broker_sockets(connection):
+    """Yield the sockets a broker connection already has open."""
+    # Virtual transports (redis, SQS, ...) keep a client per channel.  The
+    # redis transport reads from these during ``Channel.close()``.
+    try:
+        channels = list(getattr(connection.transport, 'channels', None) or ())
+    except Exception:  # pylint: disable=broad-except
+        channels = ()
+    for channel in channels:
+        # Cached attributes only.  Going through the ``client`` property
+        # would dial a broker we already know is unresponsive.
+        cached = getattr(channel, '__dict__', {})
+        for name in ('client', 'subclient'):
+            sock = getattr(
+                getattr(cached.get(name), 'connection', None), '_sock', None)
+            if sock is not None:
+                yield sock
+    # py-amqp keeps a single socket on the connection's transport.  Both
+    # ``Connection.connection`` (kombu) and ``Connection.transport`` (py-amqp)
+    # are properties that *dial the broker* when unset, so read the private
+    # attributes: reconnecting to the broker we are abandoning is the very
+    # thing this function exists to avoid.
+    sock = getattr(
+        getattr(connection._connection, '_transport', None), 'sock', None)
+    if sock is not None:
+        yield sock
+
+
+def bound_open_broker_sockets(connection, timeout):
+    """Apply ``timeout`` to broker sockets that are already connected.
+
+    :func:`socket.setdefaulttimeout` - and therefore
+    :func:`default_socket_timeout` and kombu's
+    ``Connection.collect(socket_timeout=...)`` - only affects sockets created
+    *afterwards*.  Neither can bound a read on a socket that is already open,
+    yet connection teardown issues exactly such reads: the redis transport
+    drains a pending ``BRPOP`` in ``Channel.close()``, and py-amqp waits for
+    a ``basic_cancel`` reply.  When the peer has gone silent without sending
+    RST - a suspended VM, or a firewall dropping the flow - those reads never
+    return and the worker wedges.
+
+    See :issue:`9705` (reconnect) and :issue:`975` (shutdown).
+
+    Best effort: connections that expose no already-open socket where we look
+    are left alone.
+    """
+    # Never raise: both callers are teardown paths where an escaping error
+    # would turn a recoverable broker blip into worker death (the consumer
+    # handler runs inside ``except recoverable_errors``, and an escape from
+    # ``_shutdown`` would skip blueprint.stop() and the worker_shutdown
+    # signal).
+    try:
+        for sock in _open_broker_sockets(connection):
+            try:
+                sock.settimeout(timeout)
+            except Exception:  # pylint: disable=broad-except
+                pass
+    except Exception:  # pylint: disable=broad-except
+        pass
 
 
 class bgThread(threading.Thread):

@@ -26,8 +26,10 @@ from celery.utils.debug import cry
 from celery.utils.imports import qualname
 from celery.utils.log import get_logger, in_sighandler, set_in_sighandler
 from celery.utils.text import pluralize
+from celery.utils.threads import bound_open_broker_sockets
 from celery.utils.time import humanize_seconds
 from celery.worker import WorkController
+from celery.worker.worker import SHUTDOWN_SOCKET_TIMEOUT
 
 __all__ = ('Worker',)
 
@@ -443,6 +445,15 @@ def on_cold_shutdown(worker: Worker):
 
     # Initiate soft shutdown process (if enabled and tasks are running)
     worker.wait_for_soft_shutdown()
+
+    # Bound the broker socket before anything below reads from it.  cancel()
+    # is a basic_cancel on amqp, which waits for a reply that a silent broker
+    # will never send (Issue 975).  This is the only place the bound is
+    # applied: a warm shutdown deliberately leaves the socket unbounded so
+    # in-flight acks can still be flushed (see WorkController._shutdown).
+    connection = getattr(worker.consumer, 'connection', None)
+    if connection is not None:
+        bound_open_broker_sockets(connection, SHUTDOWN_SOCKET_TIMEOUT)
 
     # Stop consuming new tasks to prevents requeued messages from being immediately redelivered
     if worker.consumer.task_consumer:
