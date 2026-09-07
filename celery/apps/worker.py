@@ -15,6 +15,7 @@ from functools import partial
 
 from billiard.common import REMAP_SIGTERM
 from billiard.process import current_process
+from kombu.common import ignore_errors
 from kombu.utils.encoding import safe_str
 
 from celery import VERSION_BANNER, _original_os_write, platforms, signals
@@ -454,9 +455,10 @@ def on_cold_shutdown(worker: Worker):
     if connection is not None:
         bound_open_broker_sockets(connection, SHUTDOWN_SOCKET_TIMEOUT)
 
-    # Stop consuming new tasks to prevents requeued messages from being immediately redelivered
+    # Stop consuming new tasks to prevents requeued messages from being immediately redelivered.
+    # A bounded socket makes cancel() raise on a silent peer; that must not abort the shutdown.
     if worker.consumer.task_consumer:
-        worker.consumer.task_consumer.cancel()
+        ignore_errors(worker.consumer, worker.consumer.task_consumer.cancel)
 
     # Cancel all unacked requests and allow the worker to terminate naturally
     worker.consumer.cancel_active_requests()

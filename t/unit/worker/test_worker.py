@@ -857,6 +857,40 @@ class test_WorkController(ConsumerCase):
             sock.close()
             peer.close()
 
+    def test_cold_shutdown_survives_cancel_timeout(self):
+        # With the socket bounded, cancel() raises on a silent peer instead
+        # of hanging.  The handler must still cancel active requests and set
+        # the terminate flag, or the worker never shuts down.
+        from celery.apps.worker import on_cold_shutdown
+        from celery.worker import state as worker_state
+
+        prev_flags = (worker_state.should_stop, worker_state.should_terminate)
+        try:
+            worker = Mock(name='worker')
+            worker.consumer.connection = None
+            worker.consumer.connection_errors = (OSError,)
+            worker.consumer.channel_errors = ()
+            worker.consumer.task_consumer.cancel.side_effect = (
+                socket.timeout('timed out'))
+
+            with patch('celery.apps.worker.install_worker_term_hard_handler'), \
+                    patch('celery.apps.worker.safe_say'):
+                on_cold_shutdown(worker)
+
+            worker.consumer.cancel_active_requests.assert_called_once_with()
+            assert worker_state.should_terminate is True
+        finally:
+            worker_state.should_stop, worker_state.should_terminate = prev_flags
+
+    def test_terminate_without_consumer(self):
+        # terminate() must tolerate a worker whose consumer was never
+        # created, as signal_consumer_close() already does.
+        self.worker.__dict__.pop('consumer', None)
+        self.worker.blueprint = Mock(name='blueprint')
+        self.worker.blueprint.state = RUN
+        self.worker.terminate()
+        self.worker.blueprint.stop.assert_called_once()
+
     def test_terminate_bounds_open_broker_sockets(self):
         # Cold paths that never run on_cold_shutdown (WorkerTerminate raised
         # by the consumer, embedded callers) all land in terminate().

@@ -257,7 +257,8 @@ class WorkController:
             # Every cold path lands here, with or without on_cold_shutdown
             # (WorkerTerminate raised by the consumer, embedded callers), so
             # bound the broker socket before teardown reads from it.
-            connection = getattr(self.consumer, 'connection', None)
+            consumer = getattr(self, 'consumer', None)
+            connection = getattr(consumer, 'connection', None)
             if connection is not None:
                 bound_open_broker_sockets(connection, SHUTDOWN_SOCKET_TIMEOUT)
             self.signal_consumer_close()
