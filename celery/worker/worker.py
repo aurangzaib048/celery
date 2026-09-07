@@ -31,7 +31,7 @@ from celery.utils.log import mlevel
 from celery.utils.log import worker_logger as logger
 from celery.utils.nodenames import default_nodename, worker_direct
 from celery.utils.text import str_to_list
-from celery.utils.threads import default_socket_timeout
+from celery.utils.threads import bound_open_broker_sockets, default_socket_timeout
 
 from . import state
 
@@ -254,6 +254,12 @@ class WorkController:
     def terminate(self, in_sighandler=False):
         """Not so graceful shutdown of the worker server (Cold shutdown)."""
         if self.blueprint.state != TERMINATE:
+            # Every cold path lands here, with or without on_cold_shutdown
+            # (WorkerTerminate raised by the consumer, embedded callers), so
+            # bound the broker socket before teardown reads from it.
+            connection = getattr(self.consumer, 'connection', None)
+            if connection is not None:
+                bound_open_broker_sockets(connection, SHUTDOWN_SOCKET_TIMEOUT)
             self.signal_consumer_close()
             if not in_sighandler or self.pool.signal_safe:
                 self._shutdown(warm=False)
@@ -265,8 +271,8 @@ class WorkController:
             # Not bounding the broker socket here: a warm shutdown still has
             # acks to flush, and capping those writes on a slow broker would
             # lose acks and redeliver tasks.  A silent broker can still wedge
-            # a warm shutdown; the escape hatch is a cold shutdown (SIGQUIT),
-            # which on_cold_shutdown bounds, or the redis ``socket_timeout``
+            # a warm shutdown; the escape hatch is a cold shutdown, bounded in
+            # terminate() and on_cold_shutdown, or the redis ``socket_timeout``
             # transport option.
             with default_socket_timeout(SHUTDOWN_SOCKET_TIMEOUT):  # Issue 975
                 self.blueprint.stop(self, terminate=not warm)

@@ -857,6 +857,31 @@ class test_WorkController(ConsumerCase):
             sock.close()
             peer.close()
 
+    def test_terminate_bounds_open_broker_sockets(self):
+        # Cold paths that never run on_cold_shutdown (WorkerTerminate raised
+        # by the consumer, embedded callers) all land in terminate().
+        sock, peer = socket.socketpair()
+        try:
+            sock.settimeout(None)
+            connection = Mock(name='connection')
+            connection.transport.channels = None
+            connection._connection._transport.sock = sock
+            self.worker.consumer = Mock(name='consumer')
+            self.worker.consumer.connection = connection
+
+            seen = {}
+            self.worker.blueprint = Mock(name='blueprint')
+            self.worker.blueprint.state = RUN
+            self.worker.blueprint.stop.side_effect = (
+                lambda *a, **kw: seen.update(timeout=sock.gettimeout()))
+
+            self.worker.terminate()
+
+            assert seen['timeout'] == worker_module.SHUTDOWN_SOCKET_TIMEOUT
+        finally:
+            sock.close()
+            peer.close()
+
     def test_shutdown_without_consumer_connection(self):
         # Shutdown can run before the consumer ever connected.
         self.worker.consumer = None

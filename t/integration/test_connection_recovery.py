@@ -60,27 +60,35 @@ class BlackholeProxy:
     def __init__(self, upstream):
         self.upstream = upstream
         self._silent = threading.Event()
+        self._closed = threading.Event()
+        self._socks = []
+        self._threads = []
         self._server = socket.socket()
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(('127.0.0.1', 0))
         self._server.listen(16)
         self.port = self._server.getsockname()[1]
-        threading.Thread(target=self._accept_loop, daemon=True).start()
+        self._spawn(self._accept_loop)
+
+    def _spawn(self, target, *args):
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        self._threads.append(thread)
+        thread.start()
 
     def _accept_loop(self):
-        while True:
+        while not self._closed.is_set():
             try:
                 client, _ = self._server.accept()
                 server = socket.create_connection(self.upstream)
             except OSError:
                 return
+            self._socks += [client, server]
             for src, dst in ((client, server), (server, client)):
-                threading.Thread(target=self._pump, args=(src, dst),
-                                 daemon=True).start()
+                self._spawn(self._pump, src, dst)
 
     def _pump(self, src, dst):
         src.settimeout(0.2)
-        while True:
+        while not self._closed.is_set():
             if self._silent.is_set():
                 time.sleep(0.1)     # hold the socket open, relay nothing
                 continue
@@ -102,7 +110,12 @@ class BlackholeProxy:
         self._silent.set()
 
     def close(self):
-        self._server.close()
+        """Stop relaying, close every socket and join the threads."""
+        self._closed.set()
+        for sock in [self._server, *self._socks]:
+            sock.close()
+        for thread in self._threads:
+            thread.join(timeout=2)
 
 
 def _proxied_broker_url(port):

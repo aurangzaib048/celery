@@ -447,7 +447,8 @@ def on_cold_shutdown(worker: Worker):
     worker.wait_for_soft_shutdown()
 
     # Bound the broker socket before cancel(): on amqp that is a basic_cancel
-    # waiting for a reply a silent broker never sends (Issue 975).  Warm
+    # waiting for a reply a silent broker never sends (Issue 975).
+    # terminate() bounds again for cold paths that skip this handler; warm
     # shutdown is deliberately left unbounded, see WorkController._shutdown.
     connection = getattr(worker.consumer, 'connection', None)
     if connection is not None:
